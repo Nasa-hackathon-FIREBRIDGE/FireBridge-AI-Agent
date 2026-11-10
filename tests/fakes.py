@@ -76,10 +76,10 @@ def agent_handler(spec: ModelSpec, request: LLMRequest) -> LLMResponse:
                             "importance": 0.8,
                         },
                         {
-                            "scope": "analysis",
-                            "kind": "conclusion",
-                            "content": "July 2022 was unusually high with 30 cell-days.",
-                            "importance": 0.9,
+                            "scope": "user",
+                            "kind": "interest",
+                            "content": "The user is investigating the July 2022 fire season.",
+                            "importance": 0.7,
                         },
                     ]
                 }
