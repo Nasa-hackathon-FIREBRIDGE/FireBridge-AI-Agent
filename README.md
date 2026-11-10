@@ -29,6 +29,7 @@ flowchart LR
    - The verification result is returned with every answer.
 4. **Model router** (`llm/router.py`). It keeps answering when free-tier models run out of quota. See below.
 5. **Memory** (`memory/`). Short-term memory keeps recent turns verbatim and folds older ones into a rolling summary. Long-term memory stores durable facts about the user and the analysis.
+6. **Scope guard** (`agent/safety.py`). The agent only discusses the analysis, and refuses prompt-injection attempts. See [Scope and prompt injection](#scope-and-prompt-injection).
 
 ## Quick start
 
@@ -69,11 +70,21 @@ On Groq's free tier each model allows about 8,000 tokens per minute and 1,000 re
 | Layer | What it keeps | How |
 |---|---|---|
 | Short-term (per session) | The last `FBA_SHORT_TERM_TURNS` turns verbatim, within a token budget | When the window overflows, older turns are folded into a rolling summary by an LLM call. If no model is free, an extractive summary is used instead. |
-| Long-term (across sessions) | User preferences and profile; the analysis's interests and established conclusions | After each answer, a background call proposes up to 3 memories as JSON. Each is validated and de-duplicated: a near-duplicate reinforces the existing memory. Each scope is pruned to its 200 most valuable entries. |
+| Long-term (across sessions) | What each user said about themselves: preferences, profile, and what they are investigating | After each answer, a background call proposes up to 3 memories as JSON. Each is validated and de-duplicated: a near-duplicate reinforces the existing memory. Each user keeps their 200 most valuable entries. Claims about the data are never stored: an answer can be wrong, and a stored mistake would be served to later users. The evidence facts are the authoritative conclusions. |
 | Recall | Up to `FBA_LONG_TERM_TOP_K` memories per question | Who the user is and how they want answers always come along. Other memories need BM25 relevance to the question, weighted by importance and use. |
 | Evidence cache | Built evidence packs and summaries per language | Rebuilding an analysis invalidates its cached summaries. |
 
 Users can inspect memories (`GET /v1/memories`) and delete one or all of them (`DELETE /v1/memories/{id}`, `DELETE /v1/users/{user_id}/memories`).
+
+## Scope and prompt injection
+
+The agent only discusses the analysis it was given: its detections, months, satellites, harmonization and the limits of the data, plus the fire science and app usage needed to read them. Anything else gets a fixed refusal in the session language.
+
+| Layer | What it stops | How |
+|---|---|---|
+| Screen (`agent/safety.py`) | Plain attempts to override the rules, change the assistant's role, extract the system prompt or fake a system turn, in all seven app languages | Patterns over normalized text: case, accents, Arabic diacritics, and invisible and full-width characters are folded. The screen checks the message and the app context before any model call, so a refused attempt costs no tokens. |
+| Scope rules (system prompt) | Off-topic requests, and paraphrased attempts the screen misses | The model replies `OUT_OF_SCOPE`, and the server replaces it with the fixed refusal. Memories, the conversation summary and the app context are labelled as data and flattened to one line. |
+| No persistence | An attempt that comes back in later turns | Refused turns stay in the session history for audit (`meta.refused`), but they are never replayed into a prompt or a summary, and no memory is extracted from them. Memory candidates that address the assistant or its rules are dropped. |
 
 ## API
 
@@ -104,7 +115,8 @@ Every chat answer returns:
 - `attempts` (every model tried, and why it was skipped);
 - `usage` (token counts);
 - `memories_used`;
-- `generated_from` (`llm`, or `fallback` when every model was busy).
+- `generated_from`: `llm`; `fallback` when every model was busy; or `refusal`;
+- `refusal` when the message was refused: `injection` (screened out, no model call) or `out_of_scope` (declined by the model).
 
 Errors share one shape, `{"error": {"code", "message", "request_id", "details"}}`, and a `Retry-After` header where relevant. Every response carries `X-Request-ID`.
 
@@ -137,7 +149,7 @@ Pushes to `main` automatically validate, publish and deploy the verified image t
 `https://astramind.solutions/agent/`; pull requests run checks without deploying.
 
 ```bash
-make test     # 64 tests, no network: scripted LLM, mocked Groq and FIREBRIDGE transports
+make test     # 138 tests, no network: scripted LLM, mocked Groq and FIREBRIDGE transports
 make lint
 ```
 
@@ -153,6 +165,7 @@ make lint
 ## Limits
 
 - **The number guard checks values, not meaning.** A correct number attached to the wrong month passes. The prompt forbids computing new ratios, and evidence citations make claims checkable.
+- **The injection screen is a first filter, not a proof.** It catches common phrasings, and a determined user can paraphrase past it. The scope rules in the prompt are the second line. What limits the damage is what the agent can do: its tools only read the evidence pack, and memories are per user. An attempt that gets through can produce off-topic text, but it cannot change data or reach other users.
 - **Free-tier quotas cap throughput** at roughly 3–6 chat turns per minute across the chain. Under sustained load, answers slow down while models cool down, then degrade to fact lists.
 - **Rate limiting and model state are in memory and per process.** Run one replica, or move them to Redis before scaling out.
 - **The agent explains FIREBRIDGE results; it adds no new science.** Its answers inherit the limits of the evidence: detections are not fires, the harmonized record is an estimate, and these data do not establish causes. It is not an emergency or warning service.
