@@ -1,0 +1,41 @@
+name: firebridge-agent
+services:
+  agent:
+    image: ${AGENT_IMAGE:?A verified image is required}
+    user: '10001:10001'
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ['/tmp:size=64m,mode=1777']
+    env_file:
+      - path: ./runtime.env
+        format: raw
+    environment:
+      FBA_ENVIRONMENT: production
+      FBA_ROOT_PATH: /agent
+      FBA_DATABASE_PATH: /app/data/agent.db
+      FBA_LOG_JSON: 'true'
+    ports: ['127.0.0.1:18000:8000']
+    volumes: ['./data:/app/data']
+    networks:
+      web:
+        aliases: [firebridge-ai-agent]
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    logging:
+      driver: json-file
+      options: {max-size: '10m', max-file: '3'}
+networks:
+  web:
+    external: true
+    name: firebridge-webapp_web

@@ -1,0 +1,12 @@
+# Secrets and local state never enter the build context.
+.env
+data/
+.venv/
+.git/
+.github/
+tests/
+examples/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.db

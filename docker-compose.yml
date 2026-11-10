@@ -1,0 +1,22 @@
+services:
+  agent:
+    build: .
+    image: firebridge-ai-agent:0.1.0
+    env_file: .env
+    environment:
+      FBA_DATABASE_PATH: /app/data/agent.db
+      FBA_LOG_JSON: "true"
+    ports:
+      # Localhost only: set FBA_SERVICE_API_KEYS before exposing the service beyond this machine.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - agent-data:/app/data
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  agent-data:

@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+dist/
+build/
+*.egg-info/
+# Secrets and runtime state never go into git
+.env
+data/*.db
+data/*.db-*
+
+.env.*
+!.env.example
+*.pem
+*.key
+deploy/private/

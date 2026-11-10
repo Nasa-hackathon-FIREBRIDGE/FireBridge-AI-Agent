@@ -1,0 +1,140 @@
+name: Agent CI/CD
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    name: Lint and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: agent-checks-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: '0.11.28'
+          enable-cache: true
+      - run: uv sync --frozen --python 3.12
+      - run: uv run --frozen ruff check src tests deploy
+      - run: uv run --frozen ruff format --check src tests deploy
+      - run: uv run --frozen pytest -q
+      - name: Validate deployment shell
+        run: |
+          bash -n deploy/send_release.sh
+          shellcheck deploy/send_release.sh
+  image:
+    name: Build and verify image
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {persist-credentials: false}
+      - name: Scan source for credentials
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        with:
+          version: v0.76.2
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - name: Build production image
+        env:
+          REVISION: ${{ github.sha }}
+        run: docker build --pull --build-arg "REVISION=$REVISION" -t "firebridge-ai-agent:$REVISION" .
+      - name: Scan runtime and Python dependencies
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        with:
+          version: v0.76.2
+          image-ref: firebridge-ai-agent:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - name: Check real container authentication, readiness and persistent state
+        env:
+          REVISION: ${{ github.sha }}
+        run: python3 deploy/smoke_image.py --image "firebridge-ai-agent:$REVISION" --revision "$REVISION"
+      - name: Publish only the tested image
+        id: publish
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          REVISION: ${{ github.sha }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          target="ghcr.io/nasa-hackathon-firebridge/firebridge-ai-agent:$REVISION"
+          docker tag "firebridge-ai-agent:$REVISION" "$target"
+          docker push "$target"
+          digest=$(docker image inspect "$target" --format '{{index .RepoDigests 0}}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout ghcr.io || true
+  deploy:
+    name: Deploy to production
+    needs: image
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AGENT_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: agent-production
+    concurrency:
+      group: firebridge-agent-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {persist-credentials: false}
+      - name: Skip an obsolete release queued behind a newer main commit
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVISION: ${{ github.sha }}
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          if [[ "$head" == "$REVISION" ]]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'A newer main commit exists; skipping this deployment.'
+          fi
+      - name: Authenticate to GHCR
+        if: steps.latest.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+      - name: Transfer and activate verified image
+        if: steps.latest.outputs.current == 'true'
+        env:
+          RELEASE_REVISION: ${{ github.sha }}
+          AGENT_SOURCE: ${{ needs.image.outputs.digest }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: bash deploy/send_release.sh
+      - name: Verify public HTTPS and deployed revision
+        if: steps.latest.outputs.current == 'true'
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          curl --fail --retry 5 --retry-delay 5 --retry-all-errors https://astramind.solutions/agent/ready -o /tmp/ready.json
+          python3 -c 'import json,os; r=json.load(open("/tmp/ready.json")); assert r["status"] == "ready" and r["revision"] == os.environ["REVISION"]'
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' https://astramind.solutions/agent/v1/analyses)
+          [[ "$code" == 401 ]]
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout ghcr.io || true
