@@ -35,6 +35,12 @@ CREATE INDEX IF NOT EXISTS memories_scope ON memories(scope, scope_id);
 """
 
 
+def _content(pack_json: str) -> dict[str, Any]:
+    data = json.loads(pack_json)
+    data.pop("built_at", None)
+    return data
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -89,13 +95,15 @@ class Store:
     # ── analyses and summaries ───────────────────────────────────────────────
     async def save_analysis(self, analysis_id: str, title: str, sources: list[str], pack_json: str) -> None:
         stamp = now()
+        previous = await self.get_analysis(analysis_id)
         await self._write(
             "INSERT INTO analyses (id, title, sources, pack, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET title = excluded.title, sources = excluded.sources, pack = excluded.pack, updated_at = excluded.updated_at",
             (analysis_id, title, json.dumps(sources), pack_json, stamp, stamp),
         )
-        # A rebuilt pack invalidates cached summaries.
-        await self._write("DELETE FROM summaries WHERE analysis_id = ?", (analysis_id,))
+        # A pack with different content invalidates cached summaries; an identical rebuild keeps them.
+        if not previous or _content(previous["pack"]) != _content(pack_json):
+            await self._write("DELETE FROM summaries WHERE analysis_id = ?", (analysis_id,))
 
     async def get_analysis(self, analysis_id: str) -> dict[str, Any] | None:
         rows = await self._rows("SELECT * FROM analyses WHERE id = ?", (analysis_id,))
