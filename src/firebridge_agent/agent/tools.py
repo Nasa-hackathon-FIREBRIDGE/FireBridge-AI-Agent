@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..data.evidence import MONTH_NAMES, EvidencePack, month_name
-from ..data.satellites import label
+from ..data.satellites import SATELLITES, label
 from ..memory.bm25 import bm25_scores
 
 _MONTHS = (
@@ -75,7 +75,10 @@ def _jury_view(jury: dict[str, Any] | None) -> dict[str, Any] | None:
         "satellites_agreeing": f"{jury.get('agreeing')} of {jury.get('testifying')}"
         if jury.get("testifying")
         else None,
-        "each_satellite": {label(k): v for k, v in jury.get("witnesses", {}).items()},
+        "each_satellite": {
+            f"{label(k)} ({SATELLITES[k].instrument if k in SATELLITES else 'unknown'})": v
+            for k, v in jury.get("witnesses", {}).items()
+        },
     }
 
 
@@ -265,8 +268,15 @@ class Toolbox:
     def largest_episodes(self, args: dict[str, Any]) -> dict[str, Any]:
         limit = max(1, min(8, int(args.get("limit") or 5)))
         return {
-            "episodes": [{**e, "by_sensor": _sensors(e["by_sensor"])} for e in self.pack.episodes[:limit]],
-            "note": "Clusters of detections within 2 km and 24 h; not confirmed incidents.",
+            "episodes": [
+                {
+                    **{k: v for k, v in e.items() if k not in ("lat", "lon")},
+                    "by_sensor": _sensors(e["by_sensor"]),
+                    "location": f"{abs(e['lat']):.2f}°{'N' if e['lat'] >= 0 else 'S'}, {abs(e['lon']):.2f}°{'E' if e['lon'] >= 0 else 'W'}",
+                }
+                for e in self.pack.episodes[:limit]
+            ],
+            "note": "Clusters of detections within 2 km and 24 h; not confirmed incidents. Locations are coordinates only: the data contain no place names, so do not name a town, province or region.",
         }
 
     def handover_rehearsals(self, args: dict[str, Any]) -> dict[str, Any]:
