@@ -17,6 +17,11 @@ def _tokens(text: str) -> float:
     return len(text) / 3.5
 
 
+def _replayable(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Refused turns (injection attempts, out-of-scope requests) are never fed back to a model."""
+    return [m for m in messages if not m["meta"].get("refused")]
+
+
 class ShortTermMemory:
     def __init__(self, store: Store, router: ModelRouter, turns: int, token_budget: int, prefer: tuple[str, ...] = ()):
         self.prefer = prefer
@@ -27,7 +32,7 @@ class ShortTermMemory:
 
     async def context(self, session: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
         """Rolling summary plus the most recent messages that fit the window and the token budget."""
-        messages = await self.store.messages(session["id"], after_id=session["summarized_upto"])
+        messages = _replayable(await self.store.messages(session["id"], after_id=session["summarized_upto"]))
         recent: list[dict[str, Any]] = []
         used = 0.0
         for message in reversed(messages):
@@ -46,7 +51,7 @@ class ShortTermMemory:
         session = await self.store.get_session(session_id)
         if not session:
             return False
-        messages = await self.store.messages(session_id, after_id=session["summarized_upto"])
+        messages = _replayable(await self.store.messages(session_id, after_id=session["summarized_upto"]))
         total = sum(_tokens(m["content"]) for m in messages)
         if len(messages) <= self.max_messages and total <= self.token_budget:
             return False
