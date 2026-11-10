@@ -99,3 +99,16 @@ def test_tool_errors_are_returned_not_raised(toolbox):
     assert "unknown tool" in run(toolbox, "launch_rocket")["error"]
     assert "invalid arguments" in json.loads(toolbox.run("get_month", "{not json"))["error"]
     assert "error" in run(toolbox, "compare_periods", first="2021", second="next year")
+
+
+def test_normalizes_full_width_citations_and_tool_names():
+    text = "Aqua recorded zero【get_month】 while others did not【F29】 and 【F3, F4】; see [compare_periods†L1-L4]."
+    assert (
+        strip_tool_references(text, ["get_month", "compare_periods"])
+        == "Aqua recorded zero while others did not[F29] and [F3, F4]; see."
+    )
+
+
+def test_jury_view_names_each_satellites_instrument(toolbox):
+    witnesses = run(toolbox, "get_month", month="2021-08")["jury"]["each_satellite"]
+    assert set(witnesses) == {"Aqua (MODIS)", "Suomi-NPP (VIIRS)", "Terra (MODIS)"}
