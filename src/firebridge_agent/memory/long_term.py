@@ -1,9 +1,14 @@
-"""Long-term memory: durable facts about the user and the analysis, kept across sessions.
+"""Long-term memory: durable facts about each user, kept across sessions and analyses.
+
+Only what the user said about themselves is kept: preferences, profile, and what they are
+investigating. Conclusions about the data are never stored from model output: a mistaken answer
+would otherwise become a "memory" shown to every later user of the analysis. The evidence facts
+are the authoritative conclusions.
 
 Writing: after a turn, a small model proposes memories as JSON; each is validated, de-duplicated
 against what is already stored (a near-duplicate reinforces the existing memory instead) and the
-scope is pruned to its most valuable entries. Reading: memories of the user and of the analysis
-are ranked by BM25 relevance to the question, importance and use; preferences always come along.
+user's memories are pruned to the most valuable. Reading: ranked by BM25 relevance to the
+question, importance and use; preferences and profile always come along.
 """
 
 import logging
@@ -11,6 +16,7 @@ from typing import Any
 
 from ..agent.jsonutil import parse_json_object
 from ..agent.prompts import EXTRACT
+from ..agent.safety import is_safe_memory
 from ..errors import AgentError
 from ..llm.router import ModelRouter
 from ..llm.types import LLMRequest
@@ -19,13 +25,15 @@ from .bm25 import bm25_scores, similarity
 from .store import Store
 
 logger = logging.getLogger(__name__)
-KINDS = {"user": {"preference", "profile"}, "analysis": {"interest", "conclusion"}}
+KINDS = {"user": {"preference", "profile", "interest"}}
 MAX_PER_SCOPE = 200
 DUPLICATE_SIMILARITY = 0.6
 
 
 def scopes(user_id: str | None, analysis_id: str) -> list[tuple[str, str]]:
-    return ([("user", user_id)] if user_id else []) + [("analysis", analysis_id)]
+    """Only the user's own memories (the analysis id is accepted for callers' symmetry)."""
+    del analysis_id
+    return [("user", user_id)] if user_id else []
 
 
 class LongTermMemory:
@@ -90,6 +98,9 @@ class LongTermMemory:
             scope, kind = str(item.get("scope", "")), str(item.get("kind", ""))
             content = " ".join(str(item.get("content", "")).split())[:300]
             if scope not in KINDS or kind not in KINDS[scope] or len(content) < 8:
+                continue
+            if not is_safe_memory(content):  # would be replayed into every later prompt of this user
+                log(logger, logging.WARNING, "memory candidate dropped", reason="reads as an instruction")
                 continue
             scope_id = session.get("user_id") if scope == "user" else session["analysis_id"]
             if not scope_id:
