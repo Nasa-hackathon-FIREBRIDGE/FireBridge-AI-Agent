@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with: {persist-credentials: false}
       - name: Scan source for credentials
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           version: v0.76.2
           scan-type: fs
@@ -56,7 +56,7 @@ jobs:
           REVISION: ${{ github.sha }}
         run: docker build --pull --build-arg "REVISION=$REVISION" -t "firebridge-ai-agent:$REVISION" .
       - name: Scan runtime and Python dependencies
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           version: v0.76.2
           image-ref: firebridge-ai-agent:${{ github.sha }}
