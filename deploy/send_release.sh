@@ -17,6 +17,9 @@ docker save "firebridge-ai-agent:$revision" | gzip -1 > "$temporary/image.tar.gz
 checksum=$(sha256sum "$temporary/image.tar.gz" | cut -d ' ' -f 1)
 options=(-F /dev/null -i "$temporary/key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$temporary/known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=20 -o ServerAliveCountMax=15)
 target="firebridge-agent-deploy@$DEPLOY_HOST"
+# Values intentionally expand here after validation; the gateway validates them again.
+# shellcheck disable=SC2029
 ssh "${options[@]}" "$target" "image $revision $checksum" < "$temporary/image.tar.gz"
+# shellcheck disable=SC2029
 ssh "${options[@]}" "$target" "activate $revision"
 ssh "${options[@]}" "$target" status
