@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
+from ..agent.references import fact_refs
 from ..services import Services, sources_of
 from .deps import require_api_key, services
 from .schemas import AnalysisOut, FactOut, IngestRequest, SummaryOut, SummaryRequest
@@ -18,7 +19,9 @@ def _out(pack) -> AnalysisOut:
         period_start=pack.period_start,
         period_end_exclusive=pack.period_end_exclusive,
         built_at=pack.built_at,
-        facts=[FactOut(id=f.id, topic=f.topic, text=f.text, priority=f.priority) for f in pack.facts],
+        facts=[
+            FactOut(id=f.id, topic=f.topic, text=f.text, priority=f.priority, refs=fact_refs(f)) for f in pack.facts
+        ],
     )
 
 
