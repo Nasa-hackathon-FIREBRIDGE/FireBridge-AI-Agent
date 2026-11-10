@@ -19,6 +19,9 @@ class FactOut(BaseModel):
     topic: str
     text: str
     priority: int
+    refs: dict[str, list[Any]] = Field(
+        default_factory=dict, description="Months, days, episodes and app sections the fact is about."
+    )
 
 
 class AnalysisOut(BaseModel):
@@ -40,6 +43,7 @@ class Finding(BaseModel):
     title: str
     detail: str
     facts: list[str]
+    refs: dict[str, list[Any]] = Field(default_factory=dict)
 
 
 class SummaryOut(BaseModel):
@@ -88,8 +92,24 @@ class SessionDetail(SessionOut):
     messages: list[MessageOut]
 
 
+class ChatContext(BaseModel):
+    """Where the user is in the app, so "this month" or "here" can be understood."""
+
+    view: str = Field("", max_length=40, pattern=r"^[a-z0-9-]*$")
+    # One plain line: the label is placed in the system prompt.
+    label: str = Field("", max_length=160, pattern=r"^[^\x00-\x1f\x7f<>]*$")
+    month: str | None = Field(None, pattern=r"^\d{4}-\d{2}$")
+
+    def describe(self) -> str:
+        parts = [self.label or self.view.replace("-", " ")]
+        if self.month:
+            parts.append(f"focused on month {self.month}")
+        return ", ".join(p for p in parts if p)
+
+
 class ChatRequest(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
+    context: ChatContext | None = None
 
 
 class ChatOut(BaseModel):
@@ -97,7 +117,8 @@ class ChatOut(BaseModel):
     session_id: str
     answer: str
     generated_from: str = Field(
-        description="'llm', or 'fallback' (relevant facts only) when every model was unavailable."
+        description="'llm'; 'fallback' (relevant facts only) when every model was unavailable; or 'refusal' "
+        "when the message was outside the analysis or tried to change the agent's rules."
     )
     model: str | None
     citations: list[dict[str, str]]
@@ -106,7 +127,15 @@ class ChatOut(BaseModel):
     attempts: list[dict[str, Any]]
     usage: dict[str, int]
     memories_used: list[str]
+    references: dict[str, list[Any]] = Field(
+        default_factory=dict, description="Months, days, episodes and app sections the answer is about."
+    )
     retry_after: float | None = None
+    refusal: str | None = Field(
+        None,
+        description="Why the message was refused: 'injection' (it tried to change the agent's rules; no model "
+        "was called) or 'out_of_scope' (the model judged it unrelated to the analysis).",
+    )
 
 
 class MemoryOut(BaseModel):
