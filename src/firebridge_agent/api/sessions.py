@@ -70,7 +70,7 @@ async def delete_session(session_id: str, svc: Svc) -> None:
 async def chat(session_id: str, body: ChatRequest, svc: Svc) -> ChatOut:
     session = await _session(svc, session_id)
     pack = await svc.pack(session["analysis_id"])
-    result = await svc.agent.chat(session, pack, body.content.strip())
+    result = await svc.agent.chat(session, pack, body.content.strip(), body.context.describe() if body.context else "")
     # Housekeeping after the response: fold old turns into the summary, keep durable memories.
     svc.spawn(svc.agent.short_term.compact(session_id), f"compact:{session_id}")
     if result.generated_from == "llm":
@@ -87,7 +87,9 @@ async def chat(session_id: str, body: ChatRequest, svc: Svc) -> ChatOut:
         attempts=result.attempts,
         usage=result.usage,
         memories_used=result.memories_used,
+        references=result.references,
         retry_after=result.retry_after,
+        refusal=result.refusal,
     )
 
 
