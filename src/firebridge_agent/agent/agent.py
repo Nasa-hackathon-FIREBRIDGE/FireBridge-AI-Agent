@@ -19,6 +19,8 @@ from ..observability import log
 from .guard import Verification, allowed_values, is_degenerate, strip_tool_references, verify
 from .jsonutil import parse_json_object
 from .prompts import REPAIR, summary_task, system_prompt
+from .references import collect, fact_refs
+from .safety import is_refusal, refusal_text, screen
 from .tools import Toolbox
 
 logger = logging.getLogger(__name__)
@@ -77,8 +79,10 @@ class ChatResult:
     attempts: list[dict[str, Any]]
     usage: dict[str, int]
     memories_used: list[str]
+    references: dict[str, list[Any]] = field(default_factory=dict)
     message_id: int = 0
     retry_after: float | None = None
+    refusal: str | None = None  # 'injection' (screened out) or 'out_of_scope' (declined by the model)
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -222,7 +226,12 @@ class Agent:
             cited = [f for f in (str(x).strip("[] ") for x in item.get("facts") or []) if pack.fact(f)]
             cited += [c["id"] for c in citations_in(str(item["detail"]), pack) if c["id"] not in cited]
             findings.append(
-                {"title": str(item.get("title") or "").strip(), "detail": str(item["detail"]).strip(), "facts": cited}
+                {
+                    "title": str(item.get("title") or "").strip(),
+                    "detail": str(item["detail"]).strip(),
+                    "facts": cited,
+                    "refs": collect(pack, answer=str(item["detail"]), fact_ids=cited, tool_calls=[]),
+                }
             )
         strings = lambda key: [str(x).strip() for x in data.get(key) or [] if str(x).strip()][:5]  # noqa: E731
         return (
@@ -251,7 +260,10 @@ class Agent:
         headline = next((f.text for f in top if f.topic == "jury"), top[0].text if top else pack.title)
         return {
             "headline": headline,
-            "findings": [{"title": f.topic.capitalize(), "detail": f.text, "facts": [f.id]} for f in top[:6]],
+            "findings": [
+                {"title": f.topic.capitalize(), "detail": f.text, "facts": [f.id], "refs": fact_refs(f)}
+                for f in top[:6]
+            ],
             "caveats": [f.text for f in pack.facts if f.topic == "method"],
             "follow_up_questions": [
                 "Which months were unusual, and do the satellites agree?",
@@ -274,7 +286,11 @@ class Agent:
         return "\n".join(lines)
 
     # ── chat ─────────────────────────────────────────────────────────────────
-    async def chat(self, session: dict[str, Any], pack: EvidencePack, user_text: str) -> ChatResult:
+    async def chat(self, session: dict[str, Any], pack: EvidencePack, user_text: str, context: str = "") -> ChatResult:
+        if kind := screen(user_text, context):
+            # A plain attempt to override the rules is refused before any model call is spent on it.
+            log(logger, logging.WARNING, "chat message refused", reason=kind, session=session["id"])
+            return await self._record(session, user_text, context, self._refusal(session["language"], "injection"))
         conversation_summary, recent = await self.short_term.context(session)
         memories = await self.long_term.recall(session.get("user_id"), session["analysis_id"], user_text)
         memory_lines = [m["content"] for m in memories]
@@ -283,7 +299,7 @@ class Agent:
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": system_prompt(session["language"], digest, memory_lines, conversation_summary),
+                "content": system_prompt(session["language"], digest, memory_lines, conversation_summary, context),
             },
             *({"role": m["role"], "content": m["content"]} for m in recent),
             {"role": "user", "content": user_text},
@@ -320,22 +336,36 @@ class Agent:
                 if len(checked.unsupported) < len(verification.unsupported):
                     answer, verification, model = repaired.content, checked, repaired.model
             answer = strip_tool_references(answer, [t["function"]["name"] for t in toolbox.schemas()])
+            citations = citations_in(answer, pack)
             result = ChatResult(
                 answer,
                 "llm",
                 model,
                 verification.as_dict(),
-                citations_in(answer, pack),
+                citations,
                 trace,
                 attempts,
                 usage.__dict__,
                 memory_lines,
+                collect(pack, answer=answer, fact_ids=[c["id"] for c in citations], tool_calls=trace),
             )
         except AllModelsExhausted as exc:
             result = self._fallback_answer(
                 session["language"], pack, user_text, exc, trace, attempts, usage, memory_lines
             )
-        await self.store.add_message(session["id"], "user", user_text)
+        if result.generated_from == "llm" and is_refusal(result.answer):
+            log(logger, logging.INFO, "model declined the message", session=session["id"])
+            result = self._refusal(session["language"], "out_of_scope", declined=result)
+        if result.generated_from == "fallback":
+            result.references = collect(pack, answer="", fact_ids=[c["id"] for c in result.citations], tool_calls=[])
+        return await self._record(session, user_text, context, result)
+
+    async def _record(self, session: dict[str, Any], user_text: str, context: str, result: ChatResult) -> ChatResult:
+        """Store the turn. A refused turn is kept for audit but marked, so it never reaches a later prompt."""
+        refused = {"refused": result.refusal} if result.refusal else {}
+        await self.store.add_message(
+            session["id"], "user", user_text, {**({"context": context} if context else {}), **refused}
+        )
         result.message_id = await self.store.add_message(
             session["id"],
             "assistant",
@@ -346,9 +376,27 @@ class Agent:
                 "verification": result.verification,
                 "tool_calls": result.tool_calls,
                 "citations": [c["id"] for c in result.citations],
+                "references": result.references,
+                **refused,
             },
         )
         return result
+
+    @staticmethod
+    def _refusal(language: str, reason: str, declined: ChatResult | None = None) -> ChatResult:
+        """The fixed scope message. `declined` is the model's own refusal, kept for its trace and usage."""
+        return ChatResult(
+            refusal_text(language),
+            "refusal",
+            declined.model if declined else None,
+            Verification().as_dict(),
+            [],
+            declined.tool_calls if declined else [],
+            declined.attempts if declined else [],
+            declined.usage if declined else Usage().__dict__,
+            declined.memories_used if declined else [],
+            refusal=reason,
+        )
 
     async def _tool_loop(
         self,
