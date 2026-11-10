@@ -48,11 +48,11 @@ def _values(text: str) -> list[tuple[str, float, int]]:
 
 
 def strip_tool_references(text: str, tool_names: list[str]) -> str:
-    """Models sometimes cite tools like sources ("[compare_periods]"); evidence citations are [F#] only."""
-    if not tool_names:
-        return text
-    pattern = re.compile(r"\s?\[\s*(?:" + "|".join(map(re.escape, [*tool_names, "result", "tool"])) + r")\s*\]")
-    return pattern.sub("", text)
+    """Models sometimes cite tools like sources ("[compare_periods]", "【get_month】"); evidence
+    citations are [F#] only. Full-width brackets around evidence ids become plain [F#]."""
+    text = re.sub(r"【\s*(F\d+(?:\s*[,;]\s*F?\d+)*)\s*】", r"[\1]", text)
+    names = "|".join(map(re.escape, [*tool_names, "result", "tool"]))
+    return re.sub(r"\s?[\[【]\s*(?:" + names + r")(?:[^\]】]{0,40})?\s*[\]】]", "", text)
 
 
 def is_degenerate(text: str) -> bool:
