@@ -9,12 +9,13 @@ from dataclasses import dataclass, field
 
 _CITATION = re.compile(r"\[\s*F\d+(?:\s*[,;]\s*F?\d+)*\s*\]")
 # "1 022" / "1 022" (space thousands separators) and "17,9" (decimal comma), as French writes them.
-_SPACED_THOUSANDS = re.compile(r"(?<=\d)[\u00a0\u202f ](?=\d{3}(?!\d))")
+# A group that ends a name is not a figure: "NOAA-20 271" is a satellite and a count, not 20271.
+_SPACED_THOUSANDS = re.compile(r"(?<![\w.,\-\u2010-\u2015\u2212])\d{1,3}(?:[\u00a0\u202f ]\d{3})+(?!\d)")
 _DECIMAL_COMMA = re.compile(r"(?<=\d),(?=\d{1,2}(?!\d))")
 
 
 def normalize_numbers(text: str) -> str:
-    return _DECIMAL_COMMA.sub(".", _SPACED_THOUSANDS.sub("", text))
+    return _DECIMAL_COMMA.sub(".", _SPACED_THOUSANDS.sub(lambda m: re.sub(r"\D", "", m.group(0)), text))
 
 
 _ISO_DATE = re.compile(r"\b\d{4}-\d{2}(?:-\d{2})?\b")
