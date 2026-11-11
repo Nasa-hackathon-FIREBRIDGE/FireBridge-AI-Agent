@@ -24,6 +24,14 @@ def test_accepts_numbers_from_the_evidence(answer):
     assert verify(answer, allowed_values(EVIDENCE)).as_dict()["status"] == "verified"
 
 
+def test_satellite_names_are_not_read_as_thousands():
+    evidence = "[F6] 2022-07-15: 660 detections (Suomi-NPP 306, NOAA-20 271, Aqua 59, Terra 24)."
+    answer = "The busiest day was 2022-07-15 with 660 detections (Suomi-NPP 306, NOAA-20 271, Aqua 59) [F6]."
+    assert verify(answer, allowed_values(evidence)).unsupported == []
+    assert verify(answer.replace("-", "‑"), allowed_values(evidence)).unsupported == []  # non-breaking hyphen
+    assert verify("NOAA-21 1 022 détections", allowed_values("NOAA-21: 1,022 detections")).unsupported == []
+
+
 def test_flags_invented_numbers():
     result = verify("Activity was 19 times higher, with 4,500 detections and 42% growth.", allowed_values(EVIDENCE))
     assert result.unsupported == ["19", "4,500", "42"] and result.status == "unverified_numbers"
