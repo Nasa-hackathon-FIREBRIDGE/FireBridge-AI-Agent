@@ -55,9 +55,13 @@ def months_in_text(text: str) -> list[str]:
     return found
 
 
+def no_refs() -> dict[str, list[Any]]:
+    return {"months": [], "days": [], "episodes": [], "sections": []}
+
+
 def fact_refs(fact: Fact) -> dict[str, list[Any]]:
     """References implied by a fact's topic and wording."""
-    refs: dict[str, list[Any]] = {"months": [], "days": [], "episodes": [], "sections": []}
+    refs = no_refs()
     text = fact.text
     if fact.topic == "harmonization":
         refs["sections"].append(
@@ -96,7 +100,7 @@ def collect(
 ) -> dict[str, list[Any]]:
     from .tools import parse_day, parse_month
 
-    refs: dict[str, list[Any]] = {"months": [], "days": [], "episodes": [], "sections": []}
+    refs = no_refs()
     for call in tool_calls:
         try:
             args = json.loads(call.get("arguments") or "{}")
