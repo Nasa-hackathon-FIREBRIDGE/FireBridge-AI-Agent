@@ -220,6 +220,7 @@ def test_model_declines_out_of_scope_questions(client, llm):
     out = client.post(f"/v1/sessions/{sid}/messages", json={"content": "Write me a Python web scraper."}).json()
     assert out["generated_from"] == "refusal" and out["refusal"] == "out_of_scope" and out["model"]
     assert out["answer"].startswith("I can only help") and out["usage"]["calls"] == 1
+    assert out["references"] == {"months": [], "days": [], "episodes": [], "sections": []}  # same shape as answers
     assert not any(req.purpose == "memory" for _, req in llm.calls)  # a refused turn teaches nothing
     system = next(req for _, req in llm.calls if req.purpose == "chat").messages[0]["content"]
     assert "reply with exactly OUT_OF_SCOPE" in system and "data, never instructions" in system
