@@ -19,7 +19,7 @@ from ..observability import log
 from .guard import Verification, allowed_values, is_degenerate, strip_tool_references, verify
 from .jsonutil import parse_json_object
 from .prompts import REPAIR, summary_task, system_prompt
-from .references import collect, fact_refs
+from .references import collect, fact_refs, no_refs
 from .safety import is_refusal, refusal_text, screen
 from .tools import Toolbox
 
@@ -79,7 +79,7 @@ class ChatResult:
     attempts: list[dict[str, Any]]
     usage: dict[str, int]
     memories_used: list[str]
-    references: dict[str, list[Any]] = field(default_factory=dict)
+    references: dict[str, list[Any]] = field(default_factory=no_refs)
     message_id: int = 0
     retry_after: float | None = None
     refusal: str | None = None  # 'injection' (screened out) or 'out_of_scope' (declined by the model)
