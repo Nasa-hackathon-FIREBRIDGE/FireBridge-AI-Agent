@@ -71,6 +71,12 @@ class Fact:
     priority: int = 2
 
 
+#: Version of the fact builder. Bump it whenever the wording or meaning of facts changes: stored packs
+#: from an older builder are then treated as not ingested and rebuilt on next use, so explanations never
+#: keep a corrected fact. 2: the Aqua drift fact states how drifted years were handled (2026-11-12).
+EVIDENCE_BUILDER = 2
+
+
 @dataclass
 class EvidencePack:
     analysis_id: str
@@ -86,6 +92,12 @@ class EvidencePack:
     episodes: list[dict[str, Any]] = field(default_factory=list)
     rehearsals: list[dict[str, Any]] = field(default_factory=list)
     built_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds"))
+    builder: int = EVIDENCE_BUILDER
+
+    @property
+    def current(self) -> bool:
+        """False for packs built by older fact wording; those are rebuilt instead of reused."""
+        return self.builder >= EVIDENCE_BUILDER
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
@@ -93,6 +105,7 @@ class EvidencePack:
     @classmethod
     def from_json(cls, text: str) -> EvidencePack:
         data = json.loads(text)
+        data.setdefault("builder", 1)  # packs stored before versioning
         data["facts"] = [Fact(**f) for f in data["facts"]]
         return cls(**data)
 
@@ -364,9 +377,18 @@ def _bridge(report: dict[str, Any], facts: _Facts, pack: EvidencePack, native_lo
     aqua_drift = next((d for d in regime.get("drift", []) if d.get("sensor") == "aqua"), None)
     aqua_orbit = next((o for o in regime.get("orbits", []) if o.get("sensor") == "aqua"), None)
     if aqua_drift and aqua_orbit and aqua_orbit.get("onset"):
+        # Say what the bridge actually did with the drifted years: they are re-estimated only when at
+        # least one VIIRS platform could be calibrated (the engine then reports a driftEffect).
+        # Otherwise they keep Aqua's own drifted record; claiming VIIRS estimates there was false.
+        effect = report.get("driftEffect") or {}
+        if effect.get("estimate"):
+            via = ", ".join(label(s) for s in effect.get("sources") or []) or "VIIRS"
+            handling = f"so its drifted months are re-estimated from {via} in the harmonized record"
+        else:
+            handling = "and no VIIRS satellite could be calibrated in this window, so those years keep Aqua's drifted record in the harmonized record and are not corrected for the drift"
         facts.add(
             "drift",
-            f"Aqua's afternoon overpass drifted from {clock(aqua_drift['from'])} ({aqua_drift['fromYear']}) to {clock(aqua_drift['to'])} ({aqua_drift['toYear']}), {aqua_drift['shiftMinutes']:+d} minutes, measured from detection timestamps. From {aqua_orbit['onset']} Aqua is outside its original regime, so those years are estimated from VIIRS in the harmonized record.",
+            f"Aqua's afternoon overpass drifted from {clock(aqua_drift['from'])} ({aqua_drift['fromYear']}) to {clock(aqua_drift['to'])} ({aqua_drift['toYear']}), {aqua_drift['shiftMinutes']:+d} minutes, measured from detection timestamps. From {aqua_orbit['onset']} Aqua is outside its original regime, {handling}.",
             1,
         )
     fingerprint = regime.get("fingerprint") or {}
