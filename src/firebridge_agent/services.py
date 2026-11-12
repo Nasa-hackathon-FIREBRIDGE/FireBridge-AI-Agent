@@ -107,7 +107,12 @@ class Services:
     async def pack(self, analysis_id: str, *, auto_ingest: bool = True) -> EvidencePack:
         row = await self.store.get_analysis(analysis_id)
         if row:
-            return EvidencePack.from_json(row["pack"])
+            pack = EvidencePack.from_json(row["pack"])
+            if pack.current:
+                return pack
+            # Built with older fact wording: treat it as not ingested. The webapp then re-ingests it
+            # with its sensor-bridge report; other callers rebuild it from the API below.
+            log(logger, logging.INFO, "stale evidence pack", analysis=analysis_id, builder=pack.builder)
         if not auto_ingest:
             raise NotFound(f"Analysis {analysis_id} has not been ingested.")
         return await self.ingest(analysis_id)
