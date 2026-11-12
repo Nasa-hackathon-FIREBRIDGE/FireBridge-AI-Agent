@@ -32,6 +32,22 @@ def test_ingest_combines_api_and_report(client):
     assert client.get("/v1/analyses").json()[0]["id"] == ANALYSIS_ID
 
 
+def test_packs_from_an_older_fact_builder_are_rebuilt_not_served(client, settings):
+    import sqlite3
+
+    ingest(client)
+    # Simulate a pack stored before fact versioning (wording that has since been corrected).
+    with sqlite3.connect(settings.database_path) as db:
+        (pack,) = db.execute("SELECT pack FROM analyses WHERE id = ?", (ANALYSIS_ID,)).fetchone()
+        old = json.loads(pack)
+        old.pop("builder")
+        db.execute("UPDATE analyses SET pack = ? WHERE id = ?", (json.dumps(old), ANALYSIS_ID))
+    # Not served as known, so the webapp re-ingests it with its sensor-bridge report.
+    assert client.get(f"/v1/analyses/{ANALYSIS_ID}").status_code == 404
+    ingest(client)
+    assert client.get(f"/v1/analyses/{ANALYSIS_ID}").status_code == 200
+
+
 def test_ingest_rejects_foreign_or_malformed_reports(client):
     wrong = client.post("/v1/analyses", json={"analysis_id": "bbbbbbbb-0000", "report": bridge_report()})
     assert wrong.status_code == 422 and wrong.json()["error"]["code"] == "invalid_input"
