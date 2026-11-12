@@ -1,4 +1,6 @@
-from firebridge_agent.data.evidence import EvidencePack, build_pack
+import json
+
+from firebridge_agent.data.evidence import EVIDENCE_BUILDER, EvidencePack, build_pack
 
 from .fixtures import ANALYSIS_ID, bridge_report, native_bundle
 
@@ -41,6 +43,24 @@ def test_bridge_report_adds_harmonization_drift_rehearsal_and_jury():
     assert pack.rehearsals[0]["naive_false_alarms"] == ["2022-02", "2022-08"]
 
 
+def test_drift_fact_says_how_the_drifted_years_were_handled():
+    corrected = build_pack(ANALYSIS_ID, report=bridge_report())
+    assert any("drifted months are re-estimated from VIIRS" in t for t in texts(corrected, "drift"))
+
+    named = bridge_report()
+    named["report"]["driftEffect"]["sources"] = ["snpp", "noaa20"]
+    assert any(
+        "re-estimated from Suomi-NPP, NOAA-20" in t for t in texts(build_pack(ANALYSIS_ID, report=named), "drift")
+    )
+
+    # No VIIRS platform calibrated: the engine reports no driftEffect and keeps Aqua as flown.
+    uncorrected = bridge_report()
+    uncorrected["report"].pop("driftEffect")
+    drift = " ".join(texts(build_pack(ANALYSIS_ID, report=uncorrected), "drift"))
+    assert "keep Aqua's drifted record" in drift and "not corrected for the drift" in drift
+    assert "estimated from VIIRS" not in drift
+
+
 def test_report_only_pack_and_roundtrip():
     pack = build_pack(ANALYSIS_ID, report=bridge_report())
     assert pack.period_start == "2021-01-01" and pack.months["2022-07"]["total"] == 270
@@ -54,3 +74,12 @@ def test_digest_puts_priority_facts_first_within_budget():
     kept = [line for line in small.splitlines()[1:]]
     priorities = [pack.fact(line.split("]")[0][1:]).priority for line in kept]
     assert priorities == sorted(priorities) and priorities[0] == 1
+
+
+def test_packs_record_their_fact_builder_version():
+    pack = build_pack(ANALYSIS_ID, report=bridge_report())
+    assert pack.builder == EVIDENCE_BUILDER and pack.current
+    stored = json.loads(pack.to_json())
+    stored.pop("builder")
+    legacy = EvidencePack.from_json(json.dumps(stored))
+    assert legacy.builder == 1 and not legacy.current
